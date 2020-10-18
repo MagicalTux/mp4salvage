@@ -15,6 +15,7 @@ I didn't understand all the data found in there but I found that:
 * The `kkad` atom can be split in multiple `rtmd` frames
 * `mdat` data has chunks in `rtmd`, `video`, `audio` order
 * the `kkad` atom contains the length of the video frames in little endian order
+* this data found in `kkad` may be redundant to MP4, but when MP4 data is missing it's just life saving
 
 From there, decoding the whole `mdat` was fairly simple, as long as I could know how long was each video frame and know how many frames per chunk I was expecting, it turned to be fairly simple. The main difficulty was to find a way to feed back the h264 data to a decoder. I ended generating a new mp4 file based on the existing one, which meant dealing with some specificities of mp4 (such as handling of 64bit offets) but turned out to work fairly well.
 
