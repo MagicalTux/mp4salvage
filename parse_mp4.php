@@ -1,4 +1,5 @@
 <?php
+error_reporting(E_ALL);
 
 // http://xhelmboyx.tripod.com/formats/mp4-layout.txt
 // https://github.com/abema/go-mp4
@@ -16,6 +17,20 @@ class MP4Atom {
 
 	public function __construct($name) {
 		$this->name = $name;
+	}
+
+	public function get() {
+		fseek($this->fp, $this->offset);
+		return fread($this->fp, $this->len);
+	}
+
+	public function set($val) {
+		$fp = fopen('php://temp', 'w+');
+		fwrite($fp, $val);
+		$this->fp = $fp;
+		$this->offset = 0;
+		$this->len = strlen($val);
+		return true;
 	}
 }
 
@@ -89,9 +104,20 @@ class MP4 {
 
 		foreach($tree as $k => $v) {
 			if ($k == 'mdat') {
+				echo 'Writing mdat, this may take some time';
 				fwrite($out, pack('N', 1).$k.pack('J', $v->len+16));
 				fseek($v->fp, $v->offset);
-				stream_copy_to_stream($v->fp, $out, $v->len, $v->offset);
+				$len = $v->len;
+				$target = ftell($out)+$len;
+				while($len > 0) {
+					echo '.';
+					$tlen = min($len, 1024*1024*512); // 512MB
+					stream_copy_to_stream($v->fp, $out, $tlen);
+					fflush($out);
+					$len -= $tlen;
+				}
+				fseek($out, $target);
+				echo "\n";
 				continue;
 			}
 			$data = $this->_renderAtom($k, $v);
@@ -100,6 +126,7 @@ class MP4 {
 	}
 
 	public function _renderAtom($type, $child) {
+		echo 'Writing '.$type.' ...'."\n";
 		if (is_array($child)) {
 			$data = '';
 			$skip = false;
@@ -341,5 +368,56 @@ class MP4 {
 			$total += $c;
 		}
 		if ($this->verbose) echo str_repeat('  ', $depth). 'total='.$total.' '.implode(', ', $info)."\n";
+	}
+
+	public static function formatDuration($secs) {
+		// split in hour/min/sec
+		$hours = 0;
+		$mins = 0;
+
+		if ($secs > 3600) {
+			$hours = (int)floor($secs/3600);
+			$secs -= $hours*3600;
+		}
+		if ($secs > 60) {
+			$mins = (int)floor($secs/60);
+			$secs -= $mins*60;
+		}
+		return sprintf('%02d:%02d:%02d', $hours, $mins, $secs);
+	}
+
+	public function setDuration($val, $div) {
+		// set duration to $val/$div seconds
+		$mvhd = $this->get('/moov/mvhd');
+
+		$data = $mvhd->get();
+		list(,$flags) = unpack('N', substr($data, 0, 4));
+		if ($flags != 0) throw new \Exception('unsupported flags (v1?)');
+
+		list(, $time_unit, $duration) = unpack('N2', substr($data, 12, 8));
+
+		// compute new duration
+		$new_dur = (int)round($val * $time_unit / $div);
+
+		$data = substr_replace($data, pack('N', $new_dur), 16, 4);
+		$mvhd->set($data);
+
+		// update tracks
+		for($i = 0; isset($this->parts["/moov/trak/$i/tkhd"]); $i++) {
+			$tkhd = $this->get("/moov/trak/$i/tkhd");
+			$data = $tkhd->get();
+
+			list(,$flags, $created, $modified, $id) = unpack('N4', substr($data, 0, 16));
+			if ((($flags>>24) & 0xff) != 0) throw new \Exception('unsupported version (v1?)');
+
+			// get duration
+			list(,$duration) = unpack('N', substr($data, 20, 4));
+			#echo 'track '.$id.' duration = '.self::formatDuration($duration/$time_unit)."\n";
+
+			// set new duration
+			$data = substr_replace($data, pack('N', $new_dur), 20, 4);
+			$tkhd->set($data);
+		}
+		return true;
 	}
 }

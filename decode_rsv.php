@@ -6,7 +6,7 @@ $rec = new SonyRecovery('C0373.RSV');
 //$rec = new SonyRecovery('C0372.MP4', 0x20000);
 
 // generate recovery from valid mp4 file
-$rec->recover('C0373_fixed.MP4', 'C0372.MP4');
+$rec->recover('/drobo/C0373_fixed.MP4', 'C0372.MP4');
 
 class SonyRecovery {
 	private $fp;
@@ -36,10 +36,12 @@ class SonyRecovery {
 
 		$info = fstat($this->fp);
 		$start = microtime(true);
+		$pos = 0;
 
 		while(true) {
+			$this->endpos = $pos - $this->load_offset;
 			$pos = ftell($this->fp);
-			/* if ($pos > 500*1024*1024) {
+			/* if ($pos > 5*1024*1024*1024) {
 				$this->endpos = $pos;
 				break; // BREAK at 500MB for testing XXX
 			} // */
@@ -61,13 +63,11 @@ class SonyRecovery {
 			$this->handleVideoFrames();
 			$this->offsets['audio'][] = ftell($this->fp) - $this->load_offset;
 			$this->handleAudioFrames();
-
-			$this->endpos = ftell($this->fp) - $this->load_offset;
 		}
 		echo "\n";
 		$time = microtime(true)-$start;
 
-		printf('Parsed %d frames (%d minutes at 25fps) in %01.2f ms'."\n", count($this->all_frames), count($this->all_frames)/25/60, $time*1000);
+		printf('Parsed %d frames (%s at 25fps) in %01.2f ms'."\n", count($this->all_frames), MP4::formatDuration(count($this->all_frames)/25), $time*1000);
 	}
 
 	public function recover($out, $valid) {
@@ -112,6 +112,8 @@ class SonyRecovery {
 			$video_ctts .= pack('NNNN', 1, 3000, 2, 0); // 3000*1, 0*2
 		}
 		$mp4->override('/moov/trak/0/mdia/minf/stbl/ctts', $video_ctts);
+
+		$mp4->setDuration(count($this->all_frames), 25);
 
 		echo 'Generating new MP4 ...'."\n";
 		$mp4->output($out);
