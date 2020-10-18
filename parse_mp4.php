@@ -124,6 +124,7 @@ class MP4 {
 			$data = $this->_renderAtom($k, $v);
 			fwrite($out, $data);
 		}
+		fclose($out);
 	}
 
 	public function _renderAtom($type, $child) {

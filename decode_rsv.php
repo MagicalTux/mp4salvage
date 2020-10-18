@@ -79,8 +79,8 @@ class SonyRecovery {
 		// let's override:
 		// - /moov/trak/2/mdia/minf/stbl/stco (rtmd, from offsets)
 		// - /moov/trak/1/mdia/minf/stbl/stco (audio, from offsets)
-		// - /moov/trak/0/mdia/minf/stbl/stsz (video, from all_frames)
 		// - /moov/trak/0/mdia/minf/stbl/stco (video, from offsets)
+		// - /moov/trak/0/mdia/minf/stbl/stsz (video, from all_frames)
 
 		$offt = $mp4->get('/mdat')->offset; // position of mdat data start
 
@@ -94,7 +94,7 @@ class SonyRecovery {
 
 		foreach($tracks as $trk => $id) {
 			$need64 = false;
-			$stco = pack('NN', 0, count($this->offsets[$trk]));
+			$stco = '';
 			foreach($this->offsets[$trk] as $v) {
 				if ($v+$offt > 0x7fffffff) {
 					$need64 = true;
@@ -102,7 +102,8 @@ class SonyRecovery {
 				}
 				$stco .= pack('N', $v+$offt);
 			}
-			$mp4->override("/moov/trak/$id/mdia/minf/stbl/stco", $stco);
+			// generate the header at this point since we may not have all offsets
+			$mp4->override("/moov/trak/$id/mdia/minf/stbl/stco", pack('NN', 0, strlen($stco)/4).$stco);
 
 			if ($need64) {
 				// build 64 bits track
