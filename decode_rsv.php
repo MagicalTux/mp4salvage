@@ -2,11 +2,11 @@
 require(__DIR__.'/parse_mp4.php');
 
 // decode C0373.RSV file
-//$rec = new SonyRecovery('C0373.RSV');
-$rec = new SonyRecovery('C0372.MP4', 0x20000);
+$rec = new SonyRecovery('C0373.RSV');
+//$rec = new SonyRecovery('C0372.MP4', 0x20000);
 
 // generate recovery from valid mp4 file
-$rec->recover('output.mp4', 'C0372.MP4');
+$rec->recover('C0373_fixed.MP4', 'C0372.MP4');
 
 class SonyRecovery {
 	private $fp;
@@ -74,7 +74,7 @@ class SonyRecovery {
 		$mp4 = new MP4($valid);
 
 		// we need to override the following atoms
-		//$mp4->remove('/moov/trak/0/mdia/minf/stbl/stss'); // not needed?
+		$mp4->remove('/moov/trak/0/mdia/minf/stbl/stss'); // not needed?
 
 		// let's override:
 		// - /moov/trak/2/mdia/minf/stbl/stco (rtmd, from offsets)
@@ -100,7 +100,7 @@ class SonyRecovery {
 
 		// generate stsz
 		$video_stsz = pack('NNN', 0, 0, count($this->all_frames));
-		foreach($this->all_frames as $v) $video_stsz .= pack('N', $v);
+		foreach($this->all_frames as $v) $video_stsz .= pack('N', $v['len']);
 		$mp4->override('/moov/trak/0/mdia/minf/stbl/stsz', $video_stsz);
 
 		// generate ctts
