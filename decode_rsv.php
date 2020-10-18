@@ -86,17 +86,31 @@ class SonyRecovery {
 
 		$mp4->override('/mdat', $this->fp, $this->load_offset, $this->endpos);
 
-		$rtmd_stco = pack('NN', 0, count($this->offsets['rtmd']));
-		foreach($this->offsets['rtmd'] as $v) $rtmd_stco .= pack('N', $v+$offt);
-		$mp4->override('/moov/trak/2/mdia/minf/stbl/stco', $rtmd_stco);
+		$tracks = [
+			'rtmd' => 2,
+			'audio' => 1,
+			'video' => 0,
+		];
 
-		$audio_stco = pack('NN', 0, count($this->offsets['audio']));
-		foreach($this->offsets['audio'] as $v) $audio_stco .= pack('N', $v+$offt);
-		$mp4->override('/moov/trak/1/mdia/minf/stbl/stco', $audio_stco);
+		foreach($tracks as $trk => $id) {
+			$need64 = false;
+			$stco = pack('NN', 0, count($this->offsets[$trk]));
+			foreach($this->offsets[$trk] as $v) {
+				if ($v+$offt > 0x7fffffff) {
+					$need64 = true;
+					break;
+				}
+				$stco .= pack('N', $v+$offt);
+			}
+			$mp4->override("/moov/trak/$id/mdia/minf/stbl/stco", $stco);
 
-		$video_stco = pack('NN', 0, count($this->offsets['video']));
-		foreach($this->offsets['video'] as $v) $video_stco .= pack('N', $v+$offt);
-		$mp4->override('/moov/trak/0/mdia/minf/stbl/stco', $video_stco);
+			if ($need64) {
+				// build 64 bits track
+				$stco = pack('NN', 0, count($this->offsets[$trk]));
+				foreach($this->offsets[$trk] as $v) $stco .= pack('J', $v+$offt);
+				$mp4->override("/moov/trak/$id/mdia/minf/stbl/co64", $stco);
+			}
+		}
 
 		// generate stsz
 		$video_stsz = pack('NNN', 0, 0, count($this->all_frames));

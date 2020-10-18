@@ -6,7 +6,8 @@ error_reporting(E_ALL);
 
 if ($_SERVER['PHP_SELF'] == basename(__FILE__)) {
 	// test
-	new MP4('C0372.MP4', true);
+	new MP4('/drobo/C0373_fixed.MP4', true);
+	//new MP4('C0372.MP4', true);
 }
 
 class MP4Atom {
@@ -88,9 +89,9 @@ class MP4 {
 
 		// build recursive version of parts
 		$tree = [];
-		foreach($parts as $k => $v) {
+		foreach($parts as $v) {
 			$pos = &$tree;
-			$k = explode('/', $k);
+			$k = explode('/', $v->name);
 			$final = array_pop($k);
 
 			foreach($k as $sk) {
@@ -331,7 +332,7 @@ class MP4 {
 		if ($real_count > 0) {
 			$data = chunk_split(bin2hex(substr($data, 12)), 8, ', ');
 
-			#echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
+			//echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
 			if ($this->verbose) echo str_repeat('  ', $depth), 'Found '.$real_count.' sample sizes'."\n";
 		} else {
 			if ($this->verbose) echo str_repeat('  ', $depth), 'All sample size = '.$size.' (pad='.dechex($count).")\n";
@@ -367,7 +368,7 @@ class MP4 {
 			$info[] = $offset.'*'.$c;
 			$total += $c;
 		}
-		if ($this->verbose) echo str_repeat('  ', $depth). 'total='.$total.' '.implode(', ', $info)."\n";
+		if ($this->verbose) echo str_repeat('  ', $depth). 'total='.$total."\n";//.' '.implode(', ', $info)."\n";
 	}
 
 	public static function formatDuration($secs) {
