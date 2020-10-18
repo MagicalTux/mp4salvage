@@ -3,11 +3,24 @@
 // http://xhelmboyx.tripod.com/formats/mp4-layout.txt
 // https://github.com/abema/go-mp4
 
-new MP4('C0372.MP4');
+$mp4 = new MP4('C0372.MP4');
+
+class MP4Atom {
+	public $fp;
+	public $offset;
+	public $len;
+	public $name;
+
+	public function __construct($name) {
+		$this->name = $name;
+	}
+}
 
 class MP4 {
 	private $fp;
 	private $type = '';
+	private $parts = [];
+	private $track_num = 0;
 
 	public function __construct($file) {
 		$this->fp = fopen($file, 'r');
@@ -15,19 +28,75 @@ class MP4 {
 
 		$info = fstat($this->fp);
 
-		$this->_parseRegion(0, $info['size'], 0);
+		$this->_parseRegion(0, $info['size'], 0, '/');
 	}
 
-	public function _parseRegion($start, $len, $depth) {
+	public function output($target) {
+		$out = fopen($target, 'w');
+		$parts = $this->parts;
+
+		// build recursive version of parts
+		$tree = [];
+		foreach($parts as $k => $v) {
+			$pos = &$tree;
+			$k = explode('/', $k);
+			$final = array_pop($k);
+
+			foreach($k as $sk) {
+				if ($sk != '') {
+					if (!isset($pos[$sk])) $pos[$sk] = [];
+					$pos = &$pos[$sk];
+				}
+			}
+			$pos[$final] = $v;
+		}
+
+		foreach($tree as $k => $v) {
+			if ($k == 'mdat') {
+				fwrite($out, pack('N', 1).$k.pack('J', $v->len+16));
+				stream_copy_to_stream($v->fp, $out, $v->len, $v->offset);
+				continue;
+			}
+			$data = $this->_renderAtom($k, $v);
+			fwrite($out, $data);
+		}
+	}
+
+	public function _renderAtom($type, $child) {
+		var_dump($type);
+		if (is_array($child)) {
+			$data = '';
+			$skip = false;
+			foreach($child as $k => $v) {
+				if (is_numeric($k)) {
+					$skip = true;
+					$k = $type;
+				}
+				$data .= $this->_renderAtom($k, $v);
+			}
+			if ($skip) return $data;
+
+			return pack('N', strlen($data)+8).$type.$data;
+		}
+
+		// render one specific atom
+		$fp = $child->fp;
+		fseek($fp, $child->offset);
+		$data = fread($fp, $child->len);
+
+		return pack('N', strlen($data)+8).$type.$data;
+	}
+
+	public function _parseRegion($start, $len, $depth, $path) {
 		$end = $start+$len;
 
 		while(($start+8) < $end) {
-			$len = $this->_parseAtom($start, $depth);
+			$len = $this->_parseAtom($start, $depth, $path);
 			$start += $len;
 		}
 	}
 
-	public function _parseAtom($offset, $depth) {
+	public function _parseAtom($offset, $depth, $path) {
 		fseek($this->fp, $offset);
 		$len = fread($this->fp, 4);
 		if (strlen($len) != 4) throw new \Exception('Unable to read len');
@@ -54,12 +123,28 @@ class MP4 {
 
 		echo str_repeat('  ', $depth).'ATOM '.$type.' at 0x'.dechex($offset).' len '.$len.' ends 0x'.dechex($offset+$len)."\n";
 
+		$me = $path . $type;
+		if ($me == '/moov/trak') {
+			$tn = $this->track_num++;
+			$me .= '/'.$tn;
+		}
+		if (!in_array($type, $containers)) {
+			if (isset($this->parts[$me])) throw new \Exception('duplicate path '.$me);
+
+			$atom = new MP4Atom($me);
+			$atom->fp = $this->fp;
+			$atom->offset = $offset+$headerlen;
+			$atom->len = $len-$headerlen;
+
+			$this->parts[$me] = $atom;
+		}
+
 		$func = '_parse_atom_'.$type;
 		if (is_callable([$this, $func])) {
-			$this->$func($offset+$headerlen, $len-$headerlen, $depth+1);
+			$this->$func($offset+$headerlen, $len-$headerlen, $depth+1, $path . $type);
 		} else if (in_array($type, $containers)) {
 			// recurse
-			$this->_parseRegion($offset+$headerlen, $len-$headerlen, $depth+1);
+			$this->_parseRegion($offset+$headerlen, $len-$headerlen, $depth+1, $me . '/');
 		}
 
 		return $len;
@@ -148,7 +233,8 @@ class MP4 {
 
 		$data = chunk_split(bin2hex(substr($data, 8)), 8, ', ');
 
-		echo str_repeat('  ', $depth), 'Data offsets for '.$count.' chunks = '.$data."\n";
+		#echo str_repeat('  ', $depth), 'Data offsets for '.$count.' chunks = '.$data."\n";
+		echo str_repeat('  ', $depth), "Found $count data offsets\n";
 	}
 
 	public function _parse_atom_stsc($offset, $len, $depth) {
@@ -182,9 +268,42 @@ class MP4 {
 		if ($real_count > 0) {
 			$data = chunk_split(bin2hex(substr($data, 12)), 8, ', ');
 
-			echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
+			#echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
+			echo str_repeat('  ', $depth), 'Found '.$real_count.' sample sizes'."\n";
 		} else {
 			echo str_repeat('  ', $depth), 'All sample size = '.$size.' (pad='.dechex($count).")\n";
 		}
+	}
+
+	public function _parse_atom_stts($offset, $len, $depth) {
+		fseek($this->fp, $offset);
+		$data = fread($this->fp, $len);
+
+		list(, $flags, $count) = unpack('N2', substr($data, 0, 8));
+
+		if ($flags != 0) throw new \Exception('invalid stts atom');
+
+		echo str_repeat('  ', $depth).bin2hex($data)."\n";
+	}
+
+	public function _parse_atom_ctts($offset, $len, $depth) {
+		fseek($this->fp, $offset);
+		$data = fread($this->fp, $len);
+
+		list(, $flags, $count) = unpack('N2', substr($data, 0, 8));
+		if (($flags != 0) || ($count*8+8 != $len))
+			throw new \Exception('Invalid ctts atom');
+
+		echo str_repeat('  ', $depth). 'Found '.$count.' presentation samples'."\n";
+
+		$info = [];
+		$total = 0;
+		for($i = 0; $i < $count; $i++) {
+			list(,$c,$offset) = unpack('N2', substr($data, 8+$i*8, 8));
+			//$info[] = '0x'.dechex($offset).'*'.$c;
+			$info[] = $offset.'*'.$c;
+			$total += $c;
+		}
+		echo str_repeat('  ', $depth). 'total='.$total.' '.implode(', ', $info)."\n";
 	}
 }

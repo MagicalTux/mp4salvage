@@ -1,13 +1,16 @@
 <?php
 
 // decode C0373.RSV file
-//new SonyRecovery('C0373.RSV');
-new SonyRecovery('C0372.MP4', 0x20000);
+new SonyRecovery('C0373.RSV');
+//new SonyRecovery('C0372.MP4', 0x20000);
 
 class SonyRecovery {
 	private $fp;
 	private $kkad = '';
 	private $frames = [];
+	private $all_frames = [];
+
+	private $offsets = ['video' => [], 'audio' => [], 'rtmd' => []];
 
 	public function __construct($filename, $seek = 0) {
 		// recover a .RSV file, or load data from a generated .mp4, based on some assumptions
@@ -21,24 +24,31 @@ class SonyRecovery {
 
 	public function parseFile() {
 		while(!feof($this->fp)) {
-			echo 'Position = '.dechex(ftell($this->fp))."\n"; // 00637a41,
+			$pos = ftell($this->fp);
+			echo 'Position = '.dechex($pos)."\n"; // 00637a41,
 			// rtmd chunk
 			for($i = 0; $i < 12; $i++) $this->parseRtmdFrame();
 			$this->processKkad();
 
+			$this->offsets['rtmd'][] = $pos;
+			$this->offsets['video'][] = ftell($this->fp);
 			$this->handleVideoFrames();
+			$this->offsets['audio'][] = ftell($this->fp);
 			$this->handleAudioFrames();
 		}
 	}
 
 	public function handleVideoFrames() {
 		$len = 0;
-		foreach($this->frames as $frame) $len += $frame['len'];
+		foreach($this->frames as $frame) {
+			$this->all_frames[] = $frame;
+			$len += $frame['len'];
+		}
 
 		echo 'Video chunk size = 0x'.dechex($len)."\n";
 
 		// advance file
-		fread($this->fp, $len);
+		fseek($this->fp, $len, SEEK_CUR);
 	}
 
 	public function handleAudioFrames() {
@@ -46,7 +56,8 @@ class SonyRecovery {
 
 		echo 'Audio chunk size = 0x'.dechex($len)."\n";
 
-		fread($this->fp, $len);
+		// advance file
+		fseek($this->fp, $len, SEEK_CUR);
 	}
 
 	public function processKkad() {
