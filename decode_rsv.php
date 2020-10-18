@@ -80,6 +80,7 @@ class SonyRecovery {
 		// - /moov/trak/2/mdia/minf/stbl/stco (rtmd, from offsets)
 		// - /moov/trak/1/mdia/minf/stbl/stco (audio, from offsets)
 		// - /moov/trak/0/mdia/minf/stbl/stco (video, from offsets)
+		// - /moov/trak/*/mdia/minf/stbl/stts (frame count)
 		// - /moov/trak/0/mdia/minf/stbl/stsz (video, from all_frames)
 
 		$offt = $mp4->get('/mdat')->offset; // position of mdat data start
@@ -117,6 +118,15 @@ class SonyRecovery {
 		$video_stsz = pack('NNN', 0, 0, count($this->all_frames));
 		foreach($this->all_frames as $v) $video_stsz .= pack('N', $v['len']);
 		$mp4->override('/moov/trak/0/mdia/minf/stbl/stsz', $video_stsz);
+
+		// generate stts
+		$stts = pack('NNNN', 0, 1, count($this->all_frames), 1000);
+		$mp4->override('/moov/trak/0/mdia/minf/stbl/stts', $stts);
+		$mp4->override('/moov/trak/2/mdia/minf/stbl/stts', $stts);
+		// generate audio stts (23040 samples per chunk)
+		// 0000000000000001 00513600 00000001
+		$stts = pack('NNNN', 0, 1, count($this->offsets['audio'])*23040, 1); // 23040=frames per chunk
+		$mp4->override('/moov/trak/1/mdia/minf/stbl/stts', $stts);
 
 		// generate ctts
 		// /moov/trak/0/mdia/minf/stbl/ctts

@@ -6,8 +6,8 @@ error_reporting(E_ALL);
 
 if ($_SERVER['PHP_SELF'] == basename(__FILE__)) {
 	// test
-	new MP4('/drobo/C0373_fixed.MP4', true);
-	//new MP4('C0372.MP4', true);
+	//new MP4('/drobo/C0373_fixed.MP4', true);
+	new MP4('C0372.MP4', true);
 }
 
 class MP4Atom {
@@ -340,15 +340,32 @@ class MP4 {
 		}
 	}
 
+	public function _parse_atom_stss($offset, $len, $depth) {
+		fseek($this->fp, $offset);
+		$data = fread($this->fp, $len);
+
+		list(, $flags, $count) = unpack('N2', substr($data, 0, 8));
+
+		// TODO
+
+		//var_dump($flags, $count);
+	}
+
 	public function _parse_atom_stts($offset, $len, $depth) {
 		fseek($this->fp, $offset);
 		$data = fread($this->fp, $len);
 
 		list(, $flags, $count) = unpack('N2', substr($data, 0, 8));
 
-		if ($flags != 0) throw new \Exception('invalid stts atom');
+		if (($flags != 0) || ($count*8+8 != $len)) throw new \Exception('invalid stts atom');
 
-		if ($this->verbose) echo str_repeat('  ', $depth).bin2hex($data)."\n";
+		$info = [];
+		for($i = 0; $i < $count; $i++) {
+			list(,$cnt, $duration) = unpack('N2', substr($data, 8+$i*8, 8));
+			$info[] = $cnt.':'.$duration;
+		}
+
+		if ($this->verbose) echo str_repeat('  ', $depth).'count:duration: '.implode(', ', $info)."\n";
 	}
 
 	public function _parse_atom_ctts($offset, $len, $depth) {
@@ -414,12 +431,13 @@ class MP4 {
 
 			// get duration
 			list(,$duration) = unpack('N', substr($data, 20, 4));
-			#echo 'track '.$id.' duration = '.self::formatDuration($duration/$time_unit)."\n";
+			echo 'Setting track '.$id.' duration from '.self::formatDuration($duration/$time_unit).' to '.self::formatDuration($new_dur/$time_unit)."\n";
 
 			// set new duration
 			$data = substr_replace($data, pack('N', $new_dur), 20, 4);
 			$tkhd->set($data);
 		}
+
 		return true;
 	}
 }
