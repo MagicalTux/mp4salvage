@@ -1,41 +1,122 @@
 <?php
+require(__DIR__.'/parse_mp4.php');
 
 // decode C0373.RSV file
-new SonyRecovery('C0373.RSV');
-//new SonyRecovery('C0372.MP4', 0x20000);
+//$rec = new SonyRecovery('C0373.RSV');
+$rec = new SonyRecovery('C0372.MP4', 0x20000);
+
+// generate recovery from valid mp4 file
+$rec->recover('output.mp4', 'C0372.MP4');
 
 class SonyRecovery {
 	private $fp;
 	private $kkad = '';
 	private $frames = [];
-	private $all_frames = [];
 
+	private $all_frames = [];
 	private $offsets = ['video' => [], 'audio' => [], 'rtmd' => []];
+	private $endpos;
+	private $load_offset = 0;
 
 	public function __construct($filename, $seek = 0) {
 		// recover a .RSV file, or load data from a generated .mp4, based on some assumptions
 		$this->fp = fopen($filename, 'r');
 		if (!$this->fp) throw new \Exception('Failed to open file');
 
-		if ($seek) fseek($this->fp, $seek);
+		if ($seek) {
+			$this->load_offset = $seek;
+			fseek($this->fp, $seek);
+		}
 
 		$this->parseFile();
 	}
 
 	public function parseFile() {
-		while(!feof($this->fp)) {
-			$pos = ftell($this->fp);
-			echo 'Position = '.dechex($pos)."\n"; // 00637a41,
-			// rtmd chunk
-			for($i = 0; $i < 12; $i++) $this->parseRtmdFrame();
-			$this->processKkad();
+		echo 'Parsing file...'."\n";
 
-			$this->offsets['rtmd'][] = $pos;
-			$this->offsets['video'][] = ftell($this->fp);
+		$info = fstat($this->fp);
+		$start = microtime(true);
+
+		while(true) {
+			$pos = ftell($this->fp);
+			/* if ($pos > 500*1024*1024) {
+				$this->endpos = $pos;
+				break; // BREAK at 500MB for testing XXX
+			} // */
+
+			echo "\r".'Position = '.dechex($pos); // 00637a41,
+			// rtmd chunk
+			try {
+				for($i = 0; $i < 12; $i++) $this->parseRtmdFrame();
+				$this->processKkad();
+			} catch(\Exception $e) {
+				if ($e->getMessage() == 'EOF') {
+					break;
+				}
+				throw $e;
+			}
+
+			$this->offsets['rtmd'][] = $pos - $this->load_offset;
+			$this->offsets['video'][] = ftell($this->fp) - $this->load_offset;
 			$this->handleVideoFrames();
-			$this->offsets['audio'][] = ftell($this->fp);
+			$this->offsets['audio'][] = ftell($this->fp) - $this->load_offset;
 			$this->handleAudioFrames();
+
+			$this->endpos = ftell($this->fp) - $this->load_offset;
 		}
+		echo "\n";
+		$time = microtime(true)-$start;
+
+		printf('Parsed %d frames (%d minutes at 25fps) in %01.2f ms'."\n", count($this->all_frames), count($this->all_frames)/25/60, $time*1000);
+	}
+
+	public function recover($out, $valid) {
+		$mp4 = new MP4($valid);
+
+		// we need to override the following atoms
+		//$mp4->remove('/moov/trak/0/mdia/minf/stbl/stss'); // not needed?
+
+		// let's override:
+		// - /moov/trak/2/mdia/minf/stbl/stco (rtmd, from offsets)
+		// - /moov/trak/1/mdia/minf/stbl/stco (audio, from offsets)
+		// - /moov/trak/0/mdia/minf/stbl/stsz (video, from all_frames)
+		// - /moov/trak/0/mdia/minf/stbl/stco (video, from offsets)
+
+		$offt = $mp4->get('/mdat')->offset; // position of mdat data start
+
+		$mp4->override('/mdat', $this->fp, $this->load_offset, $this->endpos);
+
+		$rtmd_stco = pack('NN', 0, count($this->offsets['rtmd']));
+		foreach($this->offsets['rtmd'] as $v) $rtmd_stco .= pack('N', $v+$offt);
+		$mp4->override('/moov/trak/2/mdia/minf/stbl/stco', $rtmd_stco);
+
+		$audio_stco = pack('NN', 0, count($this->offsets['audio']));
+		foreach($this->offsets['audio'] as $v) $audio_stco .= pack('N', $v+$offt);
+		$mp4->override('/moov/trak/1/mdia/minf/stbl/stco', $audio_stco);
+
+		$video_stco = pack('NN', 0, count($this->offsets['video']));
+		foreach($this->offsets['video'] as $v) $video_stco .= pack('N', $v+$offt);
+		$mp4->override('/moov/trak/0/mdia/minf/stbl/stco', $video_stco);
+
+		// generate stsz
+		$video_stsz = pack('NNN', 0, 0, count($this->all_frames));
+		foreach($this->all_frames as $v) $video_stsz .= pack('N', $v);
+		$mp4->override('/moov/trak/0/mdia/minf/stbl/stsz', $video_stsz);
+
+		// generate ctts
+		// /moov/trak/0/mdia/minf/stbl/ctts
+		// 3000*1, 0*2, 3000*1, 0*2, etc... (pattern repeats)
+		$ctts_count = (int)ceil(count($this->all_frames)/3);
+		$video_ctts = pack('NN', 0, $ctts_count*2);
+		for($i = 0; $i < $ctts_count; $i++) {
+			$video_ctts .= pack('NNNN', 1, 3000, 2, 0); // 3000*1, 0*2
+		}
+		$mp4->override('/moov/trak/0/mdia/minf/stbl/ctts', $video_ctts);
+
+		echo 'Generating new MP4 ...'."\n";
+		$mp4->output($out);
+
+		new MP4($out, true);
 	}
 
 	public function handleVideoFrames() {
@@ -45,7 +126,7 @@ class SonyRecovery {
 			$len += $frame['len'];
 		}
 
-		echo 'Video chunk size = 0x'.dechex($len)."\n";
+		#echo 'Video chunk size = 0x'.dechex($len)."\n";
 
 		// advance file
 		fseek($this->fp, $len, SEEK_CUR);
@@ -54,7 +135,7 @@ class SonyRecovery {
 	public function handleAudioFrames() {
 		$len = 23040*4; // samples per frame * bytes per sample
 
-		echo 'Audio chunk size = 0x'.dechex($len)."\n";
+		#echo 'Audio chunk size = 0x'.dechex($len)."\n";
 
 		// advance file
 		fseek($this->fp, $len, SEEK_CUR);
@@ -67,9 +148,11 @@ class SonyRecovery {
 		$kkad = $this->kkad;
 		$this->kkad = '';
 
+		if (strlen($kkad) == 0) throw new \Exception('EOF');
+
 		#file_put_contents('kkad_full_'.$id.'.bin', $kkad);
 
-		echo 'Processing KKAD len='.dechex(strlen($kkad))."\n";
+		#echo 'Processing KKAD len='.dechex(strlen($kkad))."\n";
 
 		// starting offset 0x270 we have video frame info
 		// offset is 0x270 for first kkad, 0x2c for the next ones
@@ -82,13 +165,13 @@ class SonyRecovery {
 		$video_frames = substr($kkad, $start_pos);
 		$res = [];
 
-		var_dump(strlen($video_frames), $start_pos, 0x270);
+		#var_dump(strlen($video_frames), $start_pos, 0x270);
 
 		for($i = 0; $i < 12; $i++) {
 			$frame = substr($video_frames, $i*32, 32);
 			list(,$v1, $v2, $v3, $v4, $tc1, $tc2, $len, $v5) = unpack('V8', $frame);
 			if (($len < 0x1000) || ($len > 16*1024*1024)) throw new \Exception('Invalid kkad, invalid frame size');
-			echo 'Frame #'.$i.' size='.dechex($len). ' v1='.dechex($v1).' v2='.dechex($v2)."\n";
+			#echo 'Frame #'.$i.' size='.dechex($len). ' v1='.dechex($v1).' v2='.dechex($v2)."\n";
 
 			$res[] = ['len' => $len];
 		}
@@ -98,6 +181,7 @@ class SonyRecovery {
 	public function parseRtmdFrame() {
 		// parse a single rtmd frame
 		$s = fread($this->fp, 11264);
+		if (strlen($s) != 11264) throw new \Exception('EOF');
 
 		// each sample starts with following: 2 bytes header len, 0x0100, MXF KLV len, padding len (big endian)
 		list(,$hlen) = unpack('n', substr($s, 0, 2));

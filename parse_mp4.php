@@ -3,7 +3,10 @@
 // http://xhelmboyx.tripod.com/formats/mp4-layout.txt
 // https://github.com/abema/go-mp4
 
-$mp4 = new MP4('C0372.MP4');
+if ($_SERVER['PHP_SELF'] == basename(__FILE__)) {
+	// test
+	new MP4('C0372.MP4', true);
+}
 
 class MP4Atom {
 	public $fp;
@@ -21,14 +24,47 @@ class MP4 {
 	private $type = '';
 	private $parts = [];
 	private $track_num = 0;
+	private $verbose = false;
 
-	public function __construct($file) {
+	public function __construct($file, $verbose = false) {
+		$this->verbose = $verbose;
 		$this->fp = fopen($file, 'r');
 		if (!$this->fp) throw new \Exception('Failed to open file');
 
 		$info = fstat($this->fp);
 
 		$this->_parseRegion(0, $info['size'], 0, '/');
+	}
+
+	public function get($atom) {
+		return $this->parts[$atom];
+	}
+
+	public function remove($atom) {
+		unset($this->parts[$atom]);
+	}
+
+	public function override($atom, $fp, $offset = 0, $len = -1) {
+		if (is_string($fp)) {
+			$data = $fp;
+			$fp = fopen('php://temp', 'w+');
+			fwrite($fp, $data);
+			rewind($fp);
+
+			if ($len == -1) $len = strlen($data);
+		}
+
+		if ($len == -1) {
+			$stat = fstat($fp);
+			$len = $stat['size'] - $offset;
+		}
+
+		$o = new MP4Atom($atom);
+		$o->fp = $fp;
+		$o->offset = $offset;
+		$o->len = $len;
+
+		$this->parts[$atom] = $o;
 	}
 
 	public function output($target) {
@@ -54,6 +90,7 @@ class MP4 {
 		foreach($tree as $k => $v) {
 			if ($k == 'mdat') {
 				fwrite($out, pack('N', 1).$k.pack('J', $v->len+16));
+				fseek($v->fp, $v->offset);
 				stream_copy_to_stream($v->fp, $out, $v->len, $v->offset);
 				continue;
 			}
@@ -63,7 +100,6 @@ class MP4 {
 	}
 
 	public function _renderAtom($type, $child) {
-		var_dump($type);
 		if (is_array($child)) {
 			$data = '';
 			$skip = false;
@@ -121,8 +157,6 @@ class MP4 {
 		// those atom types are containers, they have atom children
 		$containers = ['moov', 'mdia', 'minf', 'trak', 'udta', 'ilst', 'mdra', 'cmov', 'rmra', 'rmda', 'clip', 'matt', 'edts', 'minf', 'dinf', 'stbl', 'sinf', 'udta'];
 
-		echo str_repeat('  ', $depth).'ATOM '.$type.' at 0x'.dechex($offset).' len '.$len.' ends 0x'.dechex($offset+$len)."\n";
-
 		$me = $path . $type;
 		if ($me == '/moov/trak') {
 			$tn = $this->track_num++;
@@ -138,6 +172,8 @@ class MP4 {
 
 			$this->parts[$me] = $atom;
 		}
+
+		if ($this->verbose) echo str_repeat('  ', $depth).'ATOM '.$me.' at 0x'.dechex($offset).' len '.$len.' ends 0x'.dechex($offset+$len)."\n";
 
 		$func = '_parse_atom_'.$type;
 		if (is_callable([$this, $func])) {
@@ -178,12 +214,12 @@ class MP4 {
 			'mp71' => 'ISO 14496-12 MPEG-7 meta data',
 		];
 
-		echo str_repeat('  ', $depth).'File of type '.$this->type.' version '.bin2hex($version).', complying with:'."\n";
+		if ($this->verbose) echo str_repeat('  ', $depth).'File of type '.$this->type.' version '.bin2hex($version).', complying with:'."\n";
 		foreach($type_compat as $type) {
 			if (isset($brand_names[$type])) {
-				echo str_repeat('  ', $depth).' * '.$brand_names[$type]." ($type)\n";
+				if ($this->verbose) echo str_repeat('  ', $depth).' * '.$brand_names[$type]." ($type)\n";
 			} else {
-				echo str_repeat('  ', $depth).' * '.$type."\n";
+				if ($this->verbose) echo str_repeat('  ', $depth).' * '.$type."\n";
 			}
 		}
 	}
@@ -219,7 +255,7 @@ class MP4 {
 		}
 
 		// data after tihs depends on the value of codec
-		echo str_repeat('  ', $depth), 'CODEC = '.$codec." (dref index=$dref_idx)\n";
+		if ($this->verbose) echo str_repeat('  ', $depth), 'CODEC = '.$codec." (dref index=$dref_idx)\n";
 		//var_dump(bin2hex($data));
 	}
 
@@ -234,7 +270,7 @@ class MP4 {
 		$data = chunk_split(bin2hex(substr($data, 8)), 8, ', ');
 
 		#echo str_repeat('  ', $depth), 'Data offsets for '.$count.' chunks = '.$data."\n";
-		echo str_repeat('  ', $depth), "Found $count data offsets\n";
+		if ($this->verbose) echo str_repeat('  ', $depth), "Found $count data offsets\n";
 	}
 
 	public function _parse_atom_stsc($offset, $len, $depth) {
@@ -250,7 +286,7 @@ class MP4 {
 		for($i = 0; $i < $count; $i++) {
 			$sub = substr($data, $i*12, 12);
 			list(, $first_chunk, $samples, $desc) = unpack('N3', $sub);
-			echo str_repeat('  ', $depth), 'Sample to chunk: first chunk '.$first_chunk.", samples $samples, description $desc\n";
+			if ($this->verbose) echo str_repeat('  ', $depth), 'Sample to chunk: first chunk '.$first_chunk.", samples $samples, description $desc\n";
 		}
 	}
 
@@ -269,9 +305,9 @@ class MP4 {
 			$data = chunk_split(bin2hex(substr($data, 12)), 8, ', ');
 
 			#echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
-			echo str_repeat('  ', $depth), 'Found '.$real_count.' sample sizes'."\n";
+			if ($this->verbose) echo str_repeat('  ', $depth), 'Found '.$real_count.' sample sizes'."\n";
 		} else {
-			echo str_repeat('  ', $depth), 'All sample size = '.$size.' (pad='.dechex($count).")\n";
+			if ($this->verbose) echo str_repeat('  ', $depth), 'All sample size = '.$size.' (pad='.dechex($count).")\n";
 		}
 	}
 
@@ -283,7 +319,7 @@ class MP4 {
 
 		if ($flags != 0) throw new \Exception('invalid stts atom');
 
-		echo str_repeat('  ', $depth).bin2hex($data)."\n";
+		if ($this->verbose) echo str_repeat('  ', $depth).bin2hex($data)."\n";
 	}
 
 	public function _parse_atom_ctts($offset, $len, $depth) {
@@ -294,7 +330,7 @@ class MP4 {
 		if (($flags != 0) || ($count*8+8 != $len))
 			throw new \Exception('Invalid ctts atom');
 
-		echo str_repeat('  ', $depth). 'Found '.$count.' presentation samples'."\n";
+		if ($this->verbose) echo str_repeat('  ', $depth). 'Found '.$count.' presentation samples'."\n";
 
 		$info = [];
 		$total = 0;
@@ -304,6 +340,6 @@ class MP4 {
 			$info[] = $offset.'*'.$c;
 			$total += $c;
 		}
-		echo str_repeat('  ', $depth). 'total='.$total.' '.implode(', ', $info)."\n";
+		if ($this->verbose) echo str_repeat('  ', $depth). 'total='.$total.' '.implode(', ', $info)."\n";
 	}
 }
