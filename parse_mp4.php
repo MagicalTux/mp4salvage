@@ -7,7 +7,8 @@ error_reporting(E_ALL);
 if ($_SERVER['PHP_SELF'] == basename(__FILE__)) {
 	// test
 	//new MP4('/drobo/C0373_fixed.MP4', true);
-	new MP4('C0372.MP4', true);
+	//new MP4('C0372.MP4', true);
+	$f = new MP4('C0373_fixed.MP4', true);
 }
 
 class MP4Atom {
@@ -339,7 +340,7 @@ class MP4 {
 			//echo str_repeat('  ', $depth), 'Sample sizes = '.$data."\n";
 			if ($this->verbose) echo str_repeat('  ', $depth), 'Found '.$real_count.' sample sizes'."\n";
 		} else {
-			if ($this->verbose) echo str_repeat('  ', $depth), 'All sample size = '.$size.' (pad='.dechex($count).")\n";
+			if ($this->verbose) echo str_repeat('  ', $depth), 'All sample size = '.$size.' (frames='.$count.")\n";
 		}
 	}
 

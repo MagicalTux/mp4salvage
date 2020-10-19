@@ -6,7 +6,7 @@ $rec = new SonyRecovery('C0373.RSV');
 //$rec = new SonyRecovery('C0372.MP4', 0x20000);
 
 // generate recovery from valid mp4 file
-$rec->recover('/drobo/C0373_fixed.MP4', 'C0372.MP4');
+$rec->recover('C0373_fixed.MP4', 'C0372.MP4');
 
 class SonyRecovery {
 	private $fp;
@@ -103,11 +103,13 @@ class SonyRecovery {
 				}
 				$stco .= pack('N', $v+$offt);
 			}
-			// generate the header at this point since we may not have all offsets
-			$mp4->override("/moov/trak/$id/mdia/minf/stbl/stco", pack('NN', 0, strlen($stco)/4).$stco);
 
-			if ($need64) {
-				// build 64 bits track
+			if (!$need64) {
+				$mp4->override("/moov/trak/$id/mdia/minf/stbl/stco", pack('NN', 0, strlen($stco)/4).$stco);
+			} else {
+				// build 64 bits track instead
+				$mp4->remove("/moov/trak/$id/mdia/minf/stbl/stco");
+
 				$stco = pack('NN', 0, count($this->offsets[$trk]));
 				foreach($this->offsets[$trk] as $v) $stco .= pack('J', $v+$offt);
 				$mp4->override("/moov/trak/$id/mdia/minf/stbl/co64", $stco);
@@ -118,6 +120,12 @@ class SonyRecovery {
 		$video_stsz = pack('NNN', 0, 0, count($this->all_frames));
 		foreach($this->all_frames as $v) $video_stsz .= pack('N', $v['len']);
 		$mp4->override('/moov/trak/0/mdia/minf/stbl/stsz', $video_stsz);
+
+		$audio_stsz = pack('NNN', 0, 4, count($this->offsets['audio'])*23040); // 23040 audio frames per chunk
+		$mp4->override('/moov/trak/1/mdia/minf/stbl/stsz', $audio_stsz);
+
+		$rtmd_stsz = pack('NNN', 0, 11264, count($this->all_frames)*12); // 12 rtmd frames per chunk
+		$mp4->override('/moov/trak/2/mdia/minf/stbl/stsz', $rtmd_stsz);
 
 		// generate stts
 		$stts = pack('NNNN', 0, 1, count($this->all_frames), 1000);
