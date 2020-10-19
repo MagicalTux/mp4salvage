@@ -9,6 +9,8 @@ if ($_SERVER['PHP_SELF'] == basename(__FILE__)) {
 	//new MP4('/drobo/C0373_fixed.MP4', true);
 	//new MP4('C0372.MP4', true);
 	$f = new MP4('C0373_fixed.MP4', true);
+	#$f->override('/mdat', '');
+	#$f->output('C0373_fixed_no_mdat.MP4');
 }
 
 class MP4Atom {
@@ -54,6 +56,7 @@ class MP4 {
 	}
 
 	public function get($atom) {
+		if (!isset($this->parts[$atom])) return NULL;
 		return $this->parts[$atom];
 	}
 
@@ -257,6 +260,34 @@ class MP4 {
 		}
 	}
 
+	public function _parse_atom_elst($offset, $len, $depth) {
+		fseek($this->fp, $offset);
+		$data = fread($this->fp, $len);
+
+		list(, $flags) = unpack('N', substr($data, 0, 4));
+		$version = ($flags >> 24) & 0xff;
+		if ($version != 0) throw new \Exception('unsupported elst');
+
+		list(, $edit_count, $time_length, $start_time) = unpack('N3', substr($data, 4, 12));
+
+		if ($this->verbose) echo str_repeat('  ', $depth).'Edit Count: '.$edit_count.' Time Length: '.self::formatDuration($time_length/90000).' Start Time: '.self::formatDuration($start_time/90000)."\n";
+	}
+
+	public function _parse_atom_mdhd($offset, $len, $depth) {
+		fseek($this->fp, $offset);
+		$data = fread($this->fp, $len);
+
+		list(, $flags) = unpack('N', substr($data, 0, 4));
+		$version = ($flags >> 24) & 0xff;
+		if ($version != 0) throw new \Exception('unsupported mdhd');
+
+		// version 0
+		// created/modified = long unsigned value in seconds since beginning 1904 to 2040
+		list(, $flags, $created, $modified, $time_scale, $time_duration) = unpack('N5', $data);
+
+		if ($this->verbose) echo str_repeat('  ', $depth).'Created: '.$created.' Modified: '.$modified.' Time: '.self::formatDuration($time_duration/$time_scale)."\n";
+	}
+
 	public function _parse_atom_stsd($offset, $len, $depth) {
 		fseek($this->fp, $offset);
 		$data = fread($this->fp, $len);
@@ -440,6 +471,33 @@ class MP4 {
 			// set new duration
 			$data = substr_replace($data, pack('N', $new_dur), 20, 4);
 			$tkhd->set($data);
+
+			$elst = $this->get("/moov/trak/$i/edts/elst");
+			if ($elst) {
+				$data = $elst->get();
+				list(,$flags) = unpack('N', $data);
+				if ($flags == 0) {
+					list(,$duration) = unpack('N', substr($data, 8, 4));
+					echo 'Setting track '.$id.' elst duration from '.self::formatDuration($duration/$time_unit).' to '.self::formatDuration($new_dur/$time_unit)."\n";
+					$data = substr_replace($data, pack('N', $new_dur), 8, 4);
+					$elst->set($data);
+				}
+			}
+
+			$mdhd = $this->get("/moov/trak/$i/mdia/mdhd");
+			if ($mdhd) {
+				$data = $mdhd->get();
+				list(,$flags) = unpack('N', $data);
+				if ($flags == 0) {
+					list(,$time_scale, $duration) = unpack('N2', substr($data, 12, 8));
+					$mdhd_dur = (int)round($val * $time_scale / $div);
+					echo 'Setting track '.$id.' mdhd duration from '.self::formatDuration($duration/$time_scale).' to '.self::formatDuration($mdhd_dur/$time_scale)."\n";
+					$data = substr_replace($data, pack('N', $mdhd_dur), 16, 4);
+
+					list(,$time_scale, $duration) = unpack('N2', substr($data, 12, 8));
+					$mdhd->set($data);
+				}
+			}
 		}
 
 		return true;
