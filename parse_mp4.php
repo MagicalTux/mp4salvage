@@ -105,20 +105,23 @@ class MP4 {
 
 		foreach($tree as $k => $v) {
 			if ($k == 'mdat') {
-				echo 'Writing mdat, this may take some time';
+				echo 'Writing mdat: ';
 				fwrite($out, pack('N', 1).$k.pack('J', $v->len+16));
 				fseek($v->fp, $v->offset);
 				$len = $v->len;
+				$total = 0;
 				$target = ftell($out)+$len;
+
 				while($len > 0) {
-					echo '.';
-					$tlen = min($len, 1024*1024*512); // 512MB
-					stream_copy_to_stream($v->fp, $out, $tlen);
+					echo "\r".'Writing mdat: '.sprintf('%01.2f%% ...', $total/$v->len*100);
+					$tlen = min($len, 32*1024*1024); // 32MB
+					$copied = stream_copy_to_stream($v->fp, $out, $tlen);
 					fflush($out);
-					$len -= $tlen;
+					$len -= $copied;
+					$total += $copied;
 				}
 				fseek($out, $target);
-				echo "\n";
+				echo "\r".'Writing mdat: 100% !!   '."\n";
 				continue;
 			}
 			$data = $this->_renderAtom($k, $v);
